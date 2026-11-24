@@ -8,6 +8,7 @@ import re
 import sys
 import uuid
 
+import requests
 from cryptography.hazmat.primitives.ciphers.aead import AESSIV
 from dotenv import load_dotenv
 
@@ -55,6 +56,26 @@ def load_key() -> bytes:
     return key
 
 
+def load_server_config() -> tuple[str, float]:
+    url = os.environ.get("LICENSE_SERVER_URL")
+    if not url:
+        raise RuntimeError("LICENSE_SERVER_URL is not set")
+
+    raw_timeout = os.environ.get("LICENSE_TIMEOUT")
+    if raw_timeout is None:
+        raise RuntimeError("LICENSE_TIMEOUT is not set")
+
+    try:
+        timeout = float(raw_timeout)
+    except ValueError as exc:
+        raise RuntimeError("LICENSE_TIMEOUT must be a number") from exc
+
+    if timeout <= 0:
+        raise RuntimeError("LICENSE_TIMEOUT must be positive")
+
+    return url, timeout
+
+
 def get_info(license_number: str) -> dict[str, object]:
     base = {
         "schema": 1,
@@ -75,17 +96,42 @@ def encrypt(payload: dict[str, object], key: bytes) -> str:
     return base64.b64encode(ciphertext).decode("ascii")
 
 
+def send_payload(url: str, token: str, timeout: float) -> str:
+    try:
+        response = requests.post(
+            url,
+            json={"payload": token},
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        raise RuntimeError(f"failed to reach {url}: {exc}") from exc
+
+    if not response.ok:
+        detail = " ".join(response.text.split())
+        if len(detail) > 300:
+            detail = detail[:300] + "..."
+        message = f"server responded with {response.status_code}"
+        raise RuntimeError(f"{message}: {detail}" if detail else message)
+
+    return response.text
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="main.py",
-        description="Collect stable device parameters and encrypt the fingerprint.",
-        epilog="Example: main.py ABCD-EFGH-IJKL-MNOP",
+        description="Collect device parameters, encrypt the fingerprint and send it.",
+        epilog="Example: main.py ABCD-EFGH-IJKL-MNOP --dry-run",
     )
     parser.add_argument(
         "license",
         type=parse_license,
         metavar="LICENSE",
         help="license number in the form XXXX-XXXX-XXXX-XXXX",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print payload and token without sending",
     )
     return parser
 
@@ -97,16 +143,28 @@ def main(argv: list[str] | None = None) -> int:
     try:
         key = load_key()
         info = get_info(args.license)
+        token = encrypt(info, key)
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    token = encrypt(info, key)
+    if args.dry_run:
+        print(json.dumps(info, indent=2, sort_keys=True))
+        print()
+        print("Ciphertext (base64):")
+        print(token)
+        return 0
 
-    print(json.dumps(info, indent=2, sort_keys=True))
-    print()
-    print("Ciphertext (base64):")
-    print(token)
+    try:
+        url, timeout = load_server_config()
+        reply = send_payload(url, token, timeout)
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Sent fingerprint for license {args.license} to {url}")
+    if reply.strip():
+        print(reply)
     return 0
 
 
