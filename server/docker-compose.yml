@@ -19,7 +19,7 @@ services:
       DEVICE_ENCRYPTION_KEY: ${DEVICE_ENCRYPTION_KEY:?set DEVICE_ENCRYPTION_KEY in server/.env}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-license}:${POSTGRES_PASSWORD:-license}@db:5432/${POSTGRES_DB:-license}
     ports:
-      - "${API_PORT:-8000}:8000"
+      - "8000:8000"
     depends_on:
       db:
         condition: service_healthy
