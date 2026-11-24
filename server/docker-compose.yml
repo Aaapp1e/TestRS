@@ -1,0 +1,33 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-license}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-license}
+      POSTGRES_DB: ${POSTGRES_DB:-license}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-license} -d ${POSTGRES_DB:-license}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    environment:
+      DEVICE_ENCRYPTION_KEY: ${DEVICE_ENCRYPTION_KEY:?set DEVICE_ENCRYPTION_KEY in server/.env}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-license}:${POSTGRES_PASSWORD:-license}@db:5432/${POSTGRES_DB:-license}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
